@@ -1377,6 +1377,13 @@ class ControlCenter(AbstractController):
                 "to create a new one"
             )
 
+            if self.session:
+                window = self._find_window('Main')
+                if not window:
+                    self.logger.debug("Session has no 'Main' window, Maybe session is in use somewhere.")
+                    self.session.new_window('Main')
+                session_ready = True    
+
         if not session_ready:
             self.logger.info(
                 f'starting new session by name "{self.session_name}" on server'
