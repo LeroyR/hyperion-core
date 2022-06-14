@@ -6,7 +6,7 @@ from yaml.constructor import ConstructorError
 
 # This is a solution provided by Josh Bode in stackoverflow to provide import
 # https://stackoverflow.com/questions/528281/how-can-i-include-an-yaml-file-inside-another
-class Loader(yaml.SafeLoader):
+class Loader(yaml.Loader):
     """Custom loader class to feature including yaml files inside each other."""
 
     def __init__(self, stream):
