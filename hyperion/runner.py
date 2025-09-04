@@ -113,6 +113,12 @@ def main():
         type=int,
         default=DEFAULT_TCP_PORT,
     )
+    subparser_server.add_argument(
+        "-e",
+        "--env",
+        help="Set environment variables of the form KEY=VALUE",
+        action='append',
+    )
 
     # Create parser for the editor command
     subparser_editor = subparsers.add_parser(
@@ -142,6 +148,12 @@ def main():
         type=str,
         help="YAML config file. see sample-config.yaml.",
         required=True,
+    )
+    subparser_cli.add_argument(
+        "-e",
+        "--env",
+        help="Set environment variables of the form KEY=VALUE",
+        action='append',
     )
 
     subparser_cli.add_argument(
@@ -228,6 +240,13 @@ def main():
     )
 
     subparser_ui.add_argument(
+        "-e",
+        "--env",
+        help="Set environment variables of the form KEY=VALUE",
+        action='append',
+    )
+
+    subparser_ui.add_argument(
         "-x",
         help="Use PyQt gui (requires X server and python-qt4 package)",
         dest="x_server",
@@ -265,6 +284,12 @@ def main():
         type=str,
         help="YAML config file. see sample-config.yaml.",
         required=True,
+    )
+    subparser_remote.add_argument(
+        "-e",
+        "--env",
+        help="Set environment variables of the form KEY=VALUE",
+        action='append',
     )
 
     subparser_remote.add_argument(
@@ -312,6 +337,16 @@ def main():
             logger.critical(f"No config file at '{args.config}' found")
             sys.exit(config.ExitStatus.CONFIG_NOT_FOUND.value)
 
+    env_overrides = {}
+    if args.env is not None:
+        for param in args.env:
+            try:
+                k,v = param.split("=")
+                env_overrides[k] = v
+            except ValueError as err:
+                logger.critical(f"could not parse environment parameter '{param}. has to be 'key=value''")
+                sys.exit(config.ExitStatus.ERRONEUS_CONFIG.value)
+
     if args.cmd == "server":
         log_file_path = f"{TMP_LOG_PATH}/localhost/server/{log_name}.log"
         rotate_log(log_file_path, log_name)
@@ -323,7 +358,7 @@ def main():
         sms = server.SlaveManagementServer()
 
         logger.debug(f"Starting backend at port: {args.port}")
-        cc = ControlCenter(args.config, True, slave_server=sms)
+        cc = ControlCenter(args.config, True, envs=env_overrides, slave_server=sms)
         cc.init()
 
         s = server.Server(int(args.port), cc)
@@ -343,7 +378,7 @@ def main():
             root_logger.addHandler(handler)
             logger.debug("Entering ui in standalone mode")
             sms = server.SlaveManagementServer()
-            cc = ControlCenter(args.config, True, slave_server=sms)
+            cc = ControlCenter(args.config, True, envs=env_overrides, slave_server=sms)
             cc.init()
 
             s = server.Server(int(args.port), cc, loop_in_thread=True)
@@ -430,7 +465,7 @@ def main():
         root_logger.addHandler(handler)
 
         sms = server.SlaveManagementServer()
-        cc = ControlCenter(args.config, slave_server=sms)
+        cc = ControlCenter(args.config, env=env_overrides, slave_server=sms)
         cc.init()
 
         if args.list:
@@ -481,7 +516,7 @@ def main():
 
     elif args.cmd == "validate":
         logger.debug("Launching validation mode")
-        cc = ControlCenter(args.config)
+        cc = ControlCenter(args.config, envs=env_overrides)
         conf_preprocessing(cc.config, cc.custom_env_path, cc.exclude_tags)
 
         if args.visual:
@@ -533,7 +568,7 @@ def main():
         root_logger.addHandler(memory_handler)
 
         logger.debug("Launching slave mode")
-        slc = SlaveManager(args.config)
+        slc = SlaveManager(args.config, envs=env_overrides)
         clientInterface.RemoteSlaveInterface(args.host, args.port, slc)
 
         logger.debug("Flushing memory handler!")

@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import shutil
+import time
 from psutil import Process, NoSuchProcess
 from subprocess import call, Popen, PIPE, STDOUT
 from threading import Lock
@@ -174,12 +175,15 @@ def conf_preprocessing(conf, custom_env=None, exclude_tags=None):
         If a duplicate group was found in `conf`.
     """
 
+    os.environ.update(config.ENVIRONMENT)
+    tmp_env = os.environ.copy()
     if custom_env:
         pipe = Popen(
             f". {custom_env} > /dev/null; env",
             stdout=PIPE,
             stderr=PIPE,
             shell=True,
+            env = tmp_env,
             executable=config.SHELL_EXECUTABLE_PATH,
         )
         data, err_lines_raw = pipe.communicate()
@@ -379,13 +383,17 @@ def resolve_host_address(hostname, ssh_config_path):
 class AbstractController(object):
     """Abstract controller class that defines basic controller variables and methods."""
 
-    def __init__(self, configfile):
+    def __init__(self, configfile, envs = None,):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(config.DEFAULT_LOG_LEVEL)
         if configfile is not None:
             self.configfile = configfile
-        self.monitor_queue = queue.Queue()  # type: queue.Queue
-        self.custom_env_path = None
+        if envs is None:
+            self.environment = {}
+        else:
+            self.environment = envs
+        self.monitor_queue = queue.Queue() # type: queue.Queue
+        self.custom_env_path= None
         self.subscribers = []
         self.stat_thread = StatMonitor()
         self.config = {}
@@ -438,6 +446,18 @@ class AbstractController(object):
 
         self.session_name = self.config["name"]
 
+        if self.config.get("environment_vars") is not None:
+            tmp = self.config.get("environment_vars")
+            # make sure all is vars are string
+            tmp = dict(map(lambda x: (x[0], str(x[1])), self.config.get("environment_vars").items()))
+            # prefer cmdline args over config values
+            for k,v in self.environment.items():
+                tmp[k] = str(v)
+            self.environment = tmp
+
+        config.ENVIRONMENT = self.environment
+        self.config["environment_vars"] = self.environment
+
         if self.config.get("env") is not None:
             env = self.config["env"]
             if os.path.isfile(env):
@@ -472,6 +492,11 @@ class AbstractController(object):
             config.SHELL_EXECUTABLE_PATH = self.config["shell_path"]
             self.logger.info(
                 f"Changed default shell to: '{config.SHELL_EXECUTABLE_PATH}'"
+            )
+        else:
+            config.SHELL_EXECUTABLE_PATH = os.environ["SHELL"]
+            self.logger.info(
+                f"default shell to $SHELL: '{config.SHELL_EXECUTABLE_PATH}'"
             )
 
         if self.config.get("monitoring_rate") is not None:
@@ -541,8 +566,13 @@ class AbstractController(object):
 
         check = get_component_cmd(comp, "check")
 
+        tmp_env = os.environ.copy()
+        for key, value in config.ENVIRONMENT.items():
+            tmp_env[key] = value
+
         p = Popen(
             f"{shell_init}{check}",
+            env = tmp_env,
             shell=True,
             stdin=PIPE,
             stdout=PIPE,
@@ -976,6 +1006,11 @@ class AbstractController(object):
         else:
             setup_log(window, log_file, comp_id)
 
+        for k, v in self.environment.items():
+            cmd = f"export {k}={v}"
+            self._wait_until_window_not_busy(window)
+            window.cmd("send-keys", cmd, "Enter")
+
         if self.custom_env_path:
             self.logger.debug(f"Sourcing custom environment for {comp_id}")
             cmd = f". {self.custom_env_path}"
@@ -1039,7 +1074,6 @@ class AbstractController(object):
 
         self.logger.debug(f"Sending command to master session main window: {cmd}")
         window = self._get_main_window()
-
         self._wait_until_window_not_busy(window)
         window.cmd("send-keys", cmd, "Enter")
         self._wait_until_window_not_busy(window)
@@ -1310,6 +1344,7 @@ class ControlCenter(AbstractController):
         self,
         configfile,
         monitor_enabled=False,
+        envs = None,
         slave_server=None,
     ):
         """Sets up the ControlCenter
@@ -1328,7 +1363,7 @@ class ControlCenter(AbstractController):
             Socket server managing connection to slaves, by default None.
         """
 
-        super(ControlCenter, self).__init__(configfile)
+        super(ControlCenter, self).__init__(configfile, envs)
         self.slave_server = slave_server
         self.nodes = {}
 
@@ -1380,8 +1415,10 @@ class ControlCenter(AbstractController):
             self.logger.info(
                 f'starting new session by name "{self.session_name}" on server'
             )
+            tmp_env = os.environ.copy()
+            tmp_env.update(config.ENVIRONMENT)
             self.session = self.server.new_session(
-                session_name=self.session_name, window_name="Main"
+                session_name=self.session_name, window_name="Main", environment=tmp_env
             )
 
         if config.MONITOR_LOCAL_STATS:
@@ -1452,10 +1489,10 @@ class ControlCenter(AbstractController):
             else:
                 self.logger.critical("Slave server is None!")
 
-            self.logger.debug("Starting slave on connected remote hosts")
+            self.logger.debug("Starting CC slave on connected remote hosts")
             for host in self.host_states:
                 if host and not self.is_localhost(host):
-                    self.logger.debug(f"Starting slave on '{host}'")
+                    self.logger.debug(f"Starting CC slave on '{host}'")
                     self._start_remote_slave(host)
 
     def reload_config(self):
@@ -1547,7 +1584,7 @@ class ControlCenter(AbstractController):
         for host in self.host_states:
             if not self.is_localhost(host):
                 if host not in old_host_states:
-                    self.logger.debug("Starting slave on '%s'" % host)
+                    self.logger.debug(f"Starting slave on {host}")
                     self._start_remote_slave(host)
                 else:
                     self.logger.debug("Updating slave on '%s'" % host)
@@ -1764,8 +1801,9 @@ class ControlCenter(AbstractController):
             Host to copy to.
         """
 
-        self.logger.debug("Dumping config to tmp")
+        
         tmp_conf_path = "%s/%s.yaml" % (config.TMP_CONF_DIR, self.config["name"])
+        self.logger.debug(f"Dumping config to tmp path: '{tmp_conf_path}'")
         ensure_dir(tmp_conf_path, mask=config.DEFAULT_LOG_UMASK)
 
         with open(tmp_conf_path, "w") as outfile:
@@ -1778,7 +1816,7 @@ class ControlCenter(AbstractController):
 
             dump(clone, outfile, default_flow_style=False)
 
-            self.logger.debug('Copying config to remote host "%s"' % host)
+            self.logger.debug(f"Copying config to remote host '{host}'")
             cmd = "ssh -F %s %s 'mkdir -p %s' && scp %s %s:%s/%s.yaml" % (
                 config.CUSTOM_SSH_CONFIG_PATH,
                 host,
@@ -2640,6 +2678,8 @@ class ControlCenter(AbstractController):
             )
             self.logger.debug("Copying env files to remote %s" % hostname)
             self._copy_env_file(hostname)
+            # HACK: leroy: bismut something something
+            sleep(0.1)
             self._copy_config_to_remote(hostname)
             return True
         else:
@@ -2855,7 +2895,7 @@ class SlaveManager(AbstractController):
         self.logger.error("This function is disabled for slave managers!")
         raise NotImplementedError
 
-    def __init__(self, configfile):
+    def __init__(self, configfile, envs):
         """Initialize slave manager.
 
         Parameters
@@ -2864,7 +2904,7 @@ class SlaveManager(AbstractController):
             Path to configuration file.
         """
 
-        super(SlaveManager, self).__init__(configfile)
+        super(SlaveManager, self).__init__(configfile, envs)
         self.nodes = {}
         self.host_states = {
             f"{socket.gethostname()}": (0, config.HostConnectionState.CONNECTED)
@@ -2903,8 +2943,10 @@ class SlaveManager(AbstractController):
             self.logger.info(
                 f"starting new session by name '{self.session_name}' on server"
             )
+            tmp_env = os.environ.copy()
+            tmp_env.update(config.ENVIRONMENT)
             self.session = self.server.new_session(
-                session_name=self.session_name, window_name="Main"
+                session_name=self.session_name, window_name="Main", environment=tmp_env
             )
 
     def cleanup(self, full=False, exit_status=config.ExitStatus.FINE):

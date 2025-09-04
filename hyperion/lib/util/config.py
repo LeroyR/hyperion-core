@@ -87,7 +87,7 @@ SHELL_EXECUTABLE_PATH = "/bin/bash"
 DEFAULT_TCP_PORT = 23081
 
 TMP_SLAVE_DIR = "/tmp/Hyperion/slave/conf"
-TMP_CONF_DIR = "/tmp/Hyperion/conf/"
+TMP_CONF_DIR = "/tmp/Hyperion/conf"
 TMP_LOG_PATH = "/tmp/Hyperion/log"
 TMP_ENV_PATH = "/tmp/Hyperion/env"
 
@@ -211,3 +211,5 @@ SLAVE_HYPERION_SOURCE_PATH = None
 
 EMPTY_HOST_STATS = ["N/A", "N/A", "N/A"]
 """Empty host stats to set on a new connection."""
+
+ENVIRONMENT = {}
